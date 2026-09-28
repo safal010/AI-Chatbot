@@ -1,50 +1,123 @@
 import "./App.css";
 import { useEffect, useState } from "react";
 
+// ========================================
+// API CONFIGURATION
+// ========================================
+
+const API_BASE_URL = "/api";
+const API_TOKEN = import.meta.env.VITE_API_TOKEN;
+
+// ========================================
+// API FETCH HELPER
+// Automatically adds Bearer token
+// ========================================
+
+async function apiFetch(url, options = {}) {
+  return fetch(`${API_BASE_URL}${url}`, {
+    ...options,
+
+    headers: {
+      ...(options.body
+        ? {
+            "Content-Type": "application/json",
+          }
+        : {}),
+
+      Authorization: `Bearer ${API_TOKEN}`,
+
+      ...options.headers,
+    },
+  });
+}
+
+// ========================================
+// APP
+// ========================================
+
 function App() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
   const [chats, setChats] = useState([]);
+  const [loading, setLoading] = useState(false);
 
+  // ========================================
   // Get saved chat ID from localStorage
+  // ========================================
+
   const [chatId, setChatId] = useState(() => {
     const savedChatId = localStorage.getItem("chatId");
 
     return savedChatId ? Number(savedChatId) : null;
   });
 
-  const [loading, setLoading] = useState(false);
-
-
-  // -------------------------
+  // ========================================
   // Load chats when app starts
-  // -------------------------
+  // ========================================
 
   useEffect(() => {
-    loadChats();
-  }, []);
+    async function initializeApp() {
+      try {
+        // Load all saved chats
+        const response = await apiFetch("/chats");
 
+        if (!response.ok) {
+          throw new Error("Could not load chats");
+        }
 
-  // -------------------------
-  // Load saved chat
-  // -------------------------
+        const data = await response.json();
 
-  useEffect(() => {
-    if (chatId) {
-      selectChat(chatId);
+        setChats(data);
+
+        // Get saved chat ID
+        const savedChatId = localStorage.getItem("chatId");
+
+        if (savedChatId) {
+          const savedId = Number(savedChatId);
+
+          // Check whether the saved chat still exists
+          const chatExists = data.some(
+            (chat) => chat.id === savedId
+          );
+
+          if (chatExists) {
+            setChatId(savedId);
+
+            // Load its messages
+            const messageResponse = await apiFetch(
+              `/chats/${savedId}/messages`
+            );
+
+            if (messageResponse.ok) {
+              const messagesData =
+                await messageResponse.json();
+
+              setMessages(messagesData);
+            }
+          } else {
+            // Saved chat no longer exists
+            localStorage.removeItem("chatId");
+            setChatId(null);
+          }
+        }
+      } catch (error) {
+        console.error(
+          "Error initializing app:",
+          error
+        );
+      }
     }
+
+    initializeApp();
   }, []);
 
-
-  // -------------------------
+  // ========================================
   // Get all chats
-  // -------------------------
+  // ========================================
 
   async function loadChats() {
     try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/chats"
-      );
+      const response = await apiFetch("/chats");
 
       if (!response.ok) {
         throw new Error("Could not load chats");
@@ -53,25 +126,20 @@ function App() {
       const data = await response.json();
 
       setChats(data);
-
     } catch (error) {
       console.error("Error loading chats:", error);
     }
   }
 
-
-  // -------------------------
+  // ========================================
   // Create new chat
-  // -------------------------
+  // ========================================
 
   async function createChat() {
     try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/chats",
-        {
-          method: "POST",
-        }
-      );
+      const response = await apiFetch("/chats", {
+        method: "POST",
+      });
 
       if (!response.ok) {
         throw new Error("Could not create chat");
@@ -79,38 +147,26 @@ function App() {
 
       const data = await response.json();
 
-      // Select new chat
       setChatId(data.id);
 
-      localStorage.setItem(
-        "chatId",
-        data.id
-      );
+      localStorage.setItem("chatId", data.id);
 
-      // Clear messages
       setMessages([]);
 
-      // Add new chat to sidebar
       setChats((previousChats) => [
         ...previousChats,
         data,
       ]);
-
     } catch (error) {
-      console.error(
-        "Error creating chat:",
-        error
-      );
+      console.error("Error creating chat:", error);
     }
   }
 
-
-  // -------------------------
-  // Send message
-  // -------------------------
+  // ========================================
+  // Send message with streaming response
+  // ========================================
 
   async function sendMessage() {
-
     if (!message.trim() || loading) {
       return;
     }
@@ -118,27 +174,19 @@ function App() {
     setLoading(true);
 
     try {
-
       let currentChatId = chatId;
 
-
-      // -------------------------
+      // ========================================
       // Create chat automatically
-      // -------------------------
+      // ========================================
 
       if (!currentChatId) {
-
-        const response = await fetch(
-          "http://127.0.0.1:8000/chats",
-          {
-            method: "POST",
-          }
-        );
+        const response = await apiFetch("/chats", {
+          method: "POST",
+        });
 
         if (!response.ok) {
-          throw new Error(
-            "Could not create chat"
-          );
+          throw new Error("Could not create chat");
         }
 
         const data = await response.json();
@@ -158,17 +206,15 @@ function App() {
         ]);
       }
 
-
-      // -------------------------
+      // ========================================
       // Save current message
-      // -------------------------
+      // ========================================
 
       const currentMessage = message;
 
-
-      // -------------------------
+      // ========================================
       // Show user message immediately
-      // -------------------------
+      // ========================================
 
       const userMessage = {
         message: currentMessage,
@@ -180,23 +226,35 @@ function App() {
         userMessage,
       ]);
 
+      // ========================================
+      // Create empty assistant message
+      // This will be updated while streaming
+      // ========================================
 
+      const assistantMessage = {
+        message: "",
+        role: "assistant",
+      };
+
+      setMessages((previousMessages) => [
+        ...previousMessages,
+        assistantMessage,
+      ]);
+
+      // ========================================
       // Clear input
+      // ========================================
+
       setMessage("");
 
-
-      // -------------------------
+      // ========================================
       // Send message to backend
-      // -------------------------
+      // ========================================
 
-      const response = await fetch(
-        `http://127.0.0.1:8000/chats/${currentChatId}/messages`,
+      const response = await apiFetch(
+        `/chats/${currentChatId}/messages`,
         {
           method: "POST",
-
-          headers: {
-            "Content-Type": "application/json",
-          },
 
           body: JSON.stringify({
             message: currentMessage,
@@ -204,10 +262,9 @@ function App() {
         }
       );
 
-
-      // -------------------------
+      // ========================================
       // Check response
-      // -------------------------
+      // ========================================
 
       if (!response.ok) {
         throw new Error(
@@ -215,38 +272,105 @@ function App() {
         );
       }
 
+      // ========================================
+      // Check streaming support
+      // ========================================
 
-      const data = await response.json();
-
-
-      // -------------------------
-      // Check backend error
-      // -------------------------
-
-      if (data.error) {
-        throw new Error(data.error);
+      if (!response.body) {
+        throw new Error(
+          "Streaming response is not supported"
+        );
       }
 
+      // ========================================
+      // Create stream reader
+      // ========================================
 
-      // -------------------------
+      const reader = response.body.getReader();
+
+      const decoder = new TextDecoder();
+
+      let assistantText = "";
+
+      // ========================================
+      // Read chunks
+      // ========================================
+
+      while (true) {
+        const { value, done } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        const chunk = decoder.decode(value, {
+          stream: true,
+        });
+
+        assistantText += chunk;
+
+        console.log("Received chunk:", chunk);
+
+        // ========================================
+        // Update assistant message in real time
+        // ========================================
+
+        setMessages((previousMessages) => {
+          const updatedMessages = [
+            ...previousMessages,
+          ];
+
+          updatedMessages[
+            updatedMessages.length - 1
+          ] = {
+            message: assistantText,
+            role: "assistant",
+          };
+
+          return updatedMessages;
+        });
+      }
+
+      // ========================================
+      // Flush remaining decoder data
+      // ========================================
+
+      const remainingText = decoder.decode();
+
+      if (remainingText) {
+        assistantText += remainingText;
+
+        setMessages((previousMessages) => {
+          const updatedMessages = [
+            ...previousMessages,
+          ];
+
+          updatedMessages[
+            updatedMessages.length - 1
+          ] = {
+            message: assistantText,
+            role: "assistant",
+          };
+
+          return updatedMessages;
+        });
+      }
+
+      // ========================================
       // Update chat title
-      // -------------------------
+      // ========================================
 
       setChats((previousChats) =>
         previousChats.map((chat) => {
-
           if (chat.id === currentChatId) {
-
             return {
               ...chat,
 
               title:
                 chat.title === "New Chat"
                   ? currentMessage.length > 30
-                    ? currentMessage.substring(
-                        0,
-                        30
-                      ) + "..."
+                    ? currentMessage.substring(0, 30) +
+                      "..."
                     : currentMessage
                   : chat.title,
             };
@@ -256,76 +380,68 @@ function App() {
         })
       );
 
+      // ========================================
+      // Reload chats from backend
+      // This keeps sidebar data synchronized
+      // ========================================
 
-      // -------------------------
-      // Show AI response
-      // -------------------------
-
-      const assistantMessage = {
-        message:
-          data.assistant_message.message,
-
-        role: "assistant",
-      };
-
-
-      setMessages((previousMessages) => [
-        ...previousMessages,
-        assistantMessage,
-      ]);
+      await loadChats();
 
     } catch (error) {
+      console.error("Error:", error);
 
-      console.error(
-        "Error:",
-        error
-      );
-
-
-      // -------------------------
+      // ========================================
       // Show error message
-      // -------------------------
+      // ========================================
 
-      const errorMessage = {
-        message:
-          "Sorry, something went wrong. Please try again.",
+      setMessages((previousMessages) => {
+        const updatedMessages = [
+          ...previousMessages,
+        ];
 
-        role: "assistant",
-      };
+        // If an empty assistant message exists,
+        // replace it with the error.
+        if (
+          updatedMessages.length > 0 &&
+          updatedMessages[
+            updatedMessages.length - 1
+          ].role === "assistant"
+        ) {
+          updatedMessages[
+            updatedMessages.length - 1
+          ] = {
+            message:
+              "Sorry, something went wrong. Please try again.",
+            role: "assistant",
+          };
+        } else {
+          updatedMessages.push({
+            message:
+              "Sorry, something went wrong. Please try again.",
+            role: "assistant",
+          });
+        }
 
-
-      setMessages((previousMessages) => [
-        ...previousMessages,
-        errorMessage,
-      ]);
-
+        return updatedMessages;
+      });
     } finally {
-
       setLoading(false);
     }
   }
 
-
-  // -------------------------
+  // ========================================
   // Select a chat
-  // -------------------------
+  // ========================================
 
   async function selectChat(id) {
-
     try {
-
       setChatId(id);
 
-      localStorage.setItem(
-        "chatId",
-        id
+      localStorage.setItem("chatId", id);
+
+      const response = await apiFetch(
+        `/chats/${id}/messages`
       );
-
-
-      const response = await fetch(
-        `http://127.0.0.1:8000/chats/${id}/messages`
-      );
-
 
       if (!response.ok) {
         throw new Error(
@@ -333,13 +449,10 @@ function App() {
         );
       }
 
-
       const data = await response.json();
 
       setMessages(data);
-
     } catch (error) {
-
       console.error(
         "Error loading messages:",
         error
@@ -347,29 +460,24 @@ function App() {
     }
   }
 
-
-  // -------------------------
+  // ========================================
   // Delete chat
-  // -------------------------
+  // ========================================
 
   async function deleteChat(id) {
-
     try {
-
-      const response = await fetch(
-        `http://127.0.0.1:8000/chats/${id}`,
+      const response = await apiFetch(
+        `/chats/${id}`,
         {
           method: "DELETE",
         }
       );
-
 
       if (!response.ok) {
         throw new Error(
           "Could not delete chat"
         );
       }
-
 
       // Remove chat from sidebar
       setChats((previousChats) =>
@@ -378,21 +486,15 @@ function App() {
         )
       );
 
-
       // If deleted chat was selected
       if (chatId === id) {
-
         setChatId(null);
 
         setMessages([]);
 
-        localStorage.removeItem(
-          "chatId"
-        );
+        localStorage.removeItem("chatId");
       }
-
     } catch (error) {
-
       console.error(
         "Error deleting chat:",
         error
@@ -400,20 +502,20 @@ function App() {
     }
   }
 
-
-  // -------------------------
+  // ========================================
   // UI
-  // -------------------------
+  // ========================================
 
   return (
     <div className="app">
 
-      {/* Sidebar */}
+      {/* ========================================
+          Sidebar
+      ======================================== */}
 
       <aside className="sidebar">
 
         <h2>AI Chat</h2>
-
 
         {/* New Chat button */}
 
@@ -424,16 +526,13 @@ function App() {
           + New Chat
         </button>
 
-
         {/* Chat list */}
 
         <div className="chat-list">
 
           {chats.map((chat) => (
-
             <div
               key={chat.id}
-
               className={
                 chat.id === chatId
                   ? "chat-item active-chat"
@@ -449,10 +548,8 @@ function App() {
                 {chat.title}
               </span>
 
-
               <button
                 className="delete-chat-button"
-
                 onClick={() =>
                   deleteChat(chat.id)
                 }
@@ -461,15 +558,15 @@ function App() {
               </button>
 
             </div>
-
           ))}
 
         </div>
 
       </aside>
 
-
-      {/* Chat area */}
+      {/* ========================================
+          Chat area
+      ======================================== */}
 
       <main className="chat-area">
 
@@ -483,46 +580,26 @@ function App() {
 
         </header>
 
-
         {/* Messages */}
 
         <div className="messages">
 
           {messages.map(
             (msg, index) => (
-
               <div
                 key={index}
-
                 className={`message ${
                   msg.role === "user"
                     ? "user-message"
                     : "assistant-message"
                 }`}
               >
-
                 {msg.message}
-
               </div>
-
             )
           )}
 
-
-          {/* Thinking indicator */}
-
-          {loading && (
-
-            <div className="message assistant-message">
-
-              Thinking...
-
-            </div>
-
-          )}
-
         </div>
-
 
         {/* Input area */}
 
@@ -530,41 +607,30 @@ function App() {
 
           <input
             type="text"
-
             placeholder="Type a message..."
-
             value={message}
-
             onChange={(event) =>
               setMessage(event.target.value)
             }
-
             onKeyDown={(event) => {
-
               if (
-                event.key === "Enter"
+                event.key === "Enter" &&
+                !event.shiftKey
               ) {
-
+                event.preventDefault();
                 sendMessage();
-
               }
-
             }}
-
             disabled={loading}
           />
 
-
           <button
             onClick={sendMessage}
-
             disabled={loading}
           >
-
             {loading
-              ? "Thinking..."
+              ? "Generating..."
               : "Send"}
-
           </button>
 
         </div>

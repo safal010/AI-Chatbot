@@ -15,4 +15,4 @@ def ask_gemini(message: str):
         contents=message
     )
 
-    return response.text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    return response.text
